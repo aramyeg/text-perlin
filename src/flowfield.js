@@ -22,6 +22,17 @@ const SKEW_STRENGTH = 1.5
 // Particle motion
 const PARTICLE_SPEED = 0.4
 const ANGLE_SMOOTH = 0.07
+const DIFFUSION = 0.12
+const HOMING_STRENGTH = 0.003 // gently pull particles back toward home grid
+
+// Fast seeded PRNG (xorshift32) — no Math.random() in hot loop
+let _rng = 12345
+function rng() {
+  _rng ^= _rng << 13
+  _rng ^= _rng >> 17
+  _rng ^= _rng << 5
+  return (_rng >>> 0) / 4294967296 // 0..1
+}
 
 // Grid-cached noise for performance
 const GRID_CELL = 48
@@ -80,6 +91,7 @@ function sampleGrid(grid, x, y) {
 // Particle state
 const MAX_CHARS = 16000
 let particles = null
+let homePositions = null // original Y positions — particles pulled gently back
 let charIdxs = null
 let totalChars = 0
 let initialized = false
@@ -92,6 +104,7 @@ function initParticles(W, H, textLen) {
   totalChars = Math.min(lineCount * colCount, MAX_CHARS)
 
   particles = new Float32Array(totalChars * 4)
+  homePositions = new Float32Array(totalChars * 2) // homeX, homeY
   charIdxs = new Uint16Array(totalChars)
 
   let idx = 0
@@ -100,10 +113,14 @@ function initParticles(W, H, textLen) {
     const baseY = -50 + li * spacing
     for (let ci = 0; ci < colCount && idx < totalChars; ci++) {
       const i4 = idx * 4
-      particles[i4] = -20 + ci * cw
-      particles[i4 + 1] = baseY
+      const hx = -20 + ci * cw
+      const hy = baseY
+      particles[i4] = hx
+      particles[i4 + 1] = hy
       particles[i4 + 2] = 0
       particles[i4 + 3] = 0
+      homePositions[idx * 2] = hx
+      homePositions[idx * 2 + 1] = hy
       charIdxs[idx] = textIdx % textLen
       textIdx++
       idx++
@@ -128,8 +145,11 @@ export function updateFlowField(noiseFlow, noiseSkew, W, H, time, textLen) {
     angle += (targetAngle - angle) * ANGLE_SMOOTH
     particles[i4 + 2] = angle
 
-    x += Math.cos(angle) * PARTICLE_SPEED
-    y += Math.sin(angle) * PARTICLE_SPEED
+    // Flow + diffusion + gentle homing force to prevent permanent ridge lock
+    const homeX = homePositions[i * 2]
+    const homeY = homePositions[i * 2 + 1]
+    x += Math.cos(angle) * PARTICLE_SPEED + (rng() - 0.5) * DIFFUSION + (homeX - x) * HOMING_STRENGTH
+    y += Math.sin(angle) * PARTICLE_SPEED + (rng() - 0.5) * DIFFUSION + (homeY - y) * HOMING_STRENGTH
 
     if (x > W + 40) x = -20
     if (x < -40) x = W + 20
