@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  base: './',
+  base: '/text-perlin/',
   build: {
     outDir: 'dist',
     target: 'esnext'
