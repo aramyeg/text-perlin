@@ -1,7 +1,8 @@
 // Per-character particle flow field with ridge noise.
-// Each particle has a small POSITION OFFSET based on its index,
-// so nearby particles sample slightly different noise positions.
-// This prevents all particles converging onto identical ridges.
+// The noise field TIME ping-pongs: forward 15s, backward 12s.
+// Particles always move forward through whatever field exists,
+// but when the field reverses, ridges move back and particles
+// naturally spread out again. Seamless breathing cycle.
 
 import { getCharWidth } from './atlas.js'
 
@@ -19,11 +20,12 @@ const SKEW_SCALE = 0.003
 const SKEW_STRENGTH = 1.5
 
 // Particle motion
-const PARTICLE_SPEED = 0.4
+const PARTICLE_SPEED = 0.7
 const ANGLE_SMOOTH = 0.07
+const OFFSET_STRENGTH = 120
 
-// Per-particle noise offset to decorrelate neighbors
-const OFFSET_STRENGTH = 60 // pixels of virtual offset per particle
+// Breathing cycle: amplitude ping-pongs between full and zero
+const HALF_CYCLE = 60 // seconds to go from full ridges to flat
 
 // Grid-cached noise
 const GRID_CELL = 48
@@ -31,7 +33,7 @@ let gridW = 0, gridH = 0
 let angleGrid = null
 let skewGrid = null
 
-function ridgeAngle(noise, x, y, t) {
+function ridgeAngle(noise, x, y, t, amplitude) {
   const wx = noise.noise(x * WARP_SCALE + 3.1, y * WARP_SCALE + 7.4) * WARP_STRENGTH
   const wy = noise.noise(x * WARP_SCALE + 1.7, y * WARP_SCALE + 4.9) * WARP_STRENGTH
   const px = ((x + wx) * WIND_COS - (y + wy) * WIND_SIN) * RIDGE_PERP_SCALE
@@ -39,10 +41,22 @@ function ridgeAngle(noise, x, y, t) {
   const n1 = noise.noise(px + t * 0.02, py + t * 0.03)
   const n2 = noise.noise(px * 2.2 + 10 + t * 0.025, py * 2.2 + 10 + t * 0.04) * 0.4
   const ridge = 1.0 - Math.abs(n1 + n2)
-  return WIND_ANGLE + (ridge - 0.5) * 1.4
+  // amplitude controls how strong the ridges pull — 0 = flat, 1 = full dunes
+  return WIND_ANGLE + (ridge - 0.5) * 1.4 * amplitude
 }
 
-function updateGrid(noiseFlow, noiseSkew, W, H, time) {
+// Amplitude oscillates: 1 → 0 → 1 (triangle wave)
+// When amplitude=1, full dune ridges. When 0, flat field, particles spread.
+function getAmplitude(time) {
+  const cycle = HALF_CYCLE * 2
+  const t = time % cycle
+  if (t < HALF_CYCLE) {
+    return 1 - t / HALF_CYCLE // 1 → 0
+  }
+  return (t - HALF_CYCLE) / HALF_CYCLE // 0 → 1
+}
+
+function updateGrid(noiseFlow, noiseSkew, W, H, time, amplitude) {
   gridW = Math.ceil(W / GRID_CELL) + 2
   gridH = Math.ceil(H / GRID_CELL) + 2
   const total = gridW * gridH
@@ -57,7 +71,7 @@ function updateGrid(noiseFlow, noiseSkew, W, H, time) {
       const idx = gy * gridW + gx
       const px = (gx - 1) * GRID_CELL
       const py = (gy - 1) * GRID_CELL
-      angleGrid[idx] = ridgeAngle(noiseFlow, px, py, time)
+      angleGrid[idx] = ridgeAngle(noiseFlow, px, py, time, amplitude)
       skewGrid[idx] = noiseSkew.noise(px * SKEW_SCALE + tsk_x, py * SKEW_SCALE + tsk_y) * SKEW_STRENGTH
     }
   }
@@ -77,16 +91,16 @@ function sampleGrid(grid, x, y) {
 }
 
 // Particle state
-const MAX_CHARS = 10000
+const MAX_CHARS = 16000
 let particles = null
-let offsets = null // per-particle noise lookup offset
+let offsets = null
 let charIdxs = null
 let totalChars = 0
 let initialized = false
 
 function initParticles(W, H, textLen) {
   const cw = getCharWidth()
-  const spacing = 13 * 1.6
+  const spacing = 13 * 1.2
   const lineCount = Math.ceil((H + 100) / spacing)
   const colCount = Math.ceil((W + 80) / cw)
   totalChars = Math.min(lineCount * colCount, MAX_CHARS)
@@ -95,7 +109,6 @@ function initParticles(W, H, textLen) {
   offsets = new Float32Array(totalChars * 2)
   charIdxs = new Uint16Array(totalChars)
 
-  // Simple hash for deterministic per-particle offsets
   let hash = 7
   let idx = 0
   let textIdx = 0
@@ -108,7 +121,6 @@ function initParticles(W, H, textLen) {
       particles[i4 + 2] = 0
       particles[i4 + 3] = 0
 
-      // Deterministic pseudo-random offset per particle
       hash = (hash * 16807 + 1) & 0x7fffffff
       offsets[idx * 2] = ((hash & 0xffff) / 65536 - 0.5) * OFFSET_STRENGTH
       hash = (hash * 16807 + 1) & 0x7fffffff
@@ -126,7 +138,8 @@ function initParticles(W, H, textLen) {
 export function updateFlowField(noiseFlow, noiseSkew, W, H, time, textLen) {
   if (!initialized) initParticles(W, H, textLen)
 
-  updateGrid(noiseFlow, noiseSkew, W, H, time)
+  const amplitude = getAmplitude(time)
+  updateGrid(noiseFlow, noiseSkew, W, H, time, amplitude)
 
   for (let i = 0; i < totalChars; i++) {
     const i4 = i * 4
@@ -134,7 +147,6 @@ export function updateFlowField(noiseFlow, noiseSkew, W, H, time, textLen) {
     let y = particles[i4 + 1]
     let angle = particles[i4 + 2]
 
-    // Sample grid at offset position — each particle sees a slightly different field
     const ox = x + offsets[i * 2]
     const oy = y + offsets[i * 2 + 1]
     const targetAngle = sampleGrid(angleGrid, ox, oy)

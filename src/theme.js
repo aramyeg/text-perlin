@@ -17,10 +17,10 @@ const LIGHT = {
 }
 
 const SKY = {
-  background: '#1a3a5c',
+  background: '#1565a0',
   palette: [
-    '#1e3f63', '#24486e', '#2d5a82', '#3a7099',
-    '#5a9ab8', '#8ec0d8', '#c4dfe9', '#f0f6fa'
+    '#0a3d6b', '#0f4d80', '#1f78b4', '#4da3d8',
+    '#7fc1e6', '#b0daf0', '#ddeef8', '#ffffff'
   ]
 }
 
