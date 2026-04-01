@@ -5,6 +5,7 @@ import { traceFlowField } from './flowfield.js'
 import { render } from './renderer.js'
 
 const noiseFlow = new Perlin(42)
+const noiseSkew = new Perlin(7)
 const noiseColor = new Perlin(137)
 
 const canvas = document.getElementById('c')
@@ -32,7 +33,7 @@ function frame(ts) {
   requestAnimationFrame(frame)
   const t = ts * 0.001
   const text = getWrappedText(W, H)
-  const flowData = traceFlowField(noiseFlow, W, H, t, text.length)
+  const flowData = traceFlowField(noiseFlow, noiseSkew, W, H, t, text.length)
   render(ctx, W, H, flowData, text, noiseColor, t)
 }
 
