@@ -1,7 +1,7 @@
 import { Perlin } from './perlin.js'
 import { initAtlas } from './atlas.js'
 import { init as initLayout, getWrappedText } from './layout.js'
-import { updateFlowField, resetLeaders } from './flowfield.js'
+import { updateFlowField, resetParticles } from './flowfield.js'
 import { render } from './renderer.js'
 
 const noiseFlow = new Perlin(42)
@@ -21,7 +21,7 @@ function resize() {
   canvas.height = H
   canvas.style.width = W + 'px'
   canvas.style.height = H + 'px'
-  resetLeaders()
+  resetParticles()
 }
 
 addEventListener('resize', resize)
@@ -34,7 +34,7 @@ function frame(ts) {
   requestAnimationFrame(frame)
   const t = ts * 0.001
   const text = getWrappedText(W, H)
-  const flowData = updateFlowField(noiseFlow, noiseSkew, W, H, t)
+  const flowData = updateFlowField(noiseFlow, noiseSkew, W, H, t, text.length)
   render(ctx, W, H, flowData, text, noiseColor, t)
 }
 

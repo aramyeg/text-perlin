@@ -1,14 +1,12 @@
-// Flow field with PERSISTENT LINE LEADERS and ridge noise for dune patterns.
-// Each line has a "leader" particle that moves through the flow field.
-// The line is drawn starting at the leader's position, following the
-// local flow field angle. Leader positions persist across frames = smooth.
-//
-// Ridge noise (1 - abs(noise)) creates dense parallel dune ridges.
-// Domain warping adds organic irregularity.
+// Per-character particle flow field with ridge noise.
+// Each character is a persistent particle that drifts through the field.
+// Ridge noise (1-abs) creates dense parallel dune ridges.
+// Budget: ~5000 chars for 60fps with drawImage atlas.
+// Wider line spacing than before to stay within budget.
 
 import { getCharWidth } from './atlas.js'
 
-// Ridge noise parameters
+// Ridge noise
 const RIDGE_PERP_SCALE = 0.016
 const RIDGE_PARA_SCALE = 0.004
 const WIND_ANGLE = Math.PI * 0.12
@@ -17,20 +15,19 @@ const WIND_SIN = Math.sin(WIND_ANGLE)
 const WARP_SCALE = 0.0025
 const WARP_STRENGTH = 180
 
-// Leader motion
-const LEADER_SPEED = 0.3
-const ANGLE_SMOOTH = 0.06
+// Skew
+const SKEW_SCALE = 0.003
+const SKEW_STRENGTH = 1.5
 
-// Skew per line
-const SKEW_STRENGTH = 1.6
+// Particle motion
+const PARTICLE_SPEED = 0.4
+const ANGLE_SMOOTH = 0.07
 
-// Line layout
-const LINE_SPACING = 13 * 1.2
-const MARGIN = 4
-
-let leaders = null // Float32Array: [x, y, angle] per line
-let lineCount = 0
-let initialized = false
+// Grid-cached noise for performance
+const GRID_CELL = 48
+let gridW = 0, gridH = 0
+let angleGrid = null
+let skewGrid = null
 
 function ridgeAngle(noise, x, y, t) {
   const wx = noise.noise(x * WARP_SCALE + 3.1, y * WARP_SCALE + 7.4) * WARP_STRENGTH
@@ -39,66 +36,110 @@ function ridgeAngle(noise, x, y, t) {
   const py = ((x + wx) * WIND_SIN + (y + wy) * WIND_COS) * RIDGE_PARA_SCALE
   const n = noise.noise(px + t * 0.006, py + t * 0.01)
   const ridge = 1.0 - Math.abs(n)
-  return WIND_ANGLE + (ridge - 0.5) * 1.0
+  return WIND_ANGLE + (ridge - 0.5) * 1.2
 }
 
-function initLeaders(H) {
-  lineCount = Math.ceil((H + 100) / LINE_SPACING)
-  leaders = new Float32Array(lineCount * 3)
-  for (let i = 0; i < lineCount; i++) {
-    const i3 = i * 3
-    leaders[i3] = MARGIN       // x: start at left edge
-    leaders[i3 + 1] = -50 + i * LINE_SPACING // y
-    leaders[i3 + 2] = 0        // angle
+function updateGrid(noiseFlow, noiseSkew, W, H, time) {
+  gridW = Math.ceil(W / GRID_CELL) + 2
+  gridH = Math.ceil(H / GRID_CELL) + 2
+  const total = gridW * gridH
+  if (!angleGrid || angleGrid.length < total) {
+    angleGrid = new Float32Array(total)
+    skewGrid = new Float32Array(total)
   }
+  const tsk_x = time * 0.04
+  const tsk_y = time * 0.06
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      const idx = gy * gridW + gx
+      const px = (gx - 1) * GRID_CELL
+      const py = (gy - 1) * GRID_CELL
+      angleGrid[idx] = ridgeAngle(noiseFlow, px, py, time)
+      skewGrid[idx] = noiseSkew.noise(px * SKEW_SCALE + tsk_x, py * SKEW_SCALE + tsk_y) * SKEW_STRENGTH
+    }
+  }
+}
+
+function sampleGrid(grid, x, y) {
+  const gx = (x / GRID_CELL) + 1
+  const gy = (y / GRID_CELL) + 1
+  const gx0 = Math.max(0, Math.min(gridW - 2, gx | 0))
+  const gy0 = Math.max(0, Math.min(gridH - 2, gy | 0))
+  const fx = gx - gx0
+  const fy = gy - gy0
+  const i00 = gy0 * gridW + gx0
+  const top = grid[i00] + (grid[i00 + 1] - grid[i00]) * fx
+  const bot = grid[i00 + gridW] + (grid[i00 + gridW + 1] - grid[i00 + gridW]) * fx
+  return top + (bot - top) * fy
+}
+
+// Particle state
+const MAX_CHARS = 5500
+let particles = null
+let charIdxs = null
+let totalChars = 0
+let initialized = false
+
+function initParticles(W, H, textLen) {
+  const cw = getCharWidth()
+  const spacing = 13 * 2.8 // wider spacing to keep ~5000 chars total
+  const lineCount = Math.ceil((H + 100) / spacing)
+  const colCount = Math.ceil((W + 80) / cw)
+  totalChars = Math.min(lineCount * colCount, MAX_CHARS)
+
+  particles = new Float32Array(totalChars * 4)
+  charIdxs = new Uint16Array(totalChars)
+
+  let idx = 0
+  let textIdx = 0
+  for (let li = 0; li < lineCount && idx < totalChars; li++) {
+    const baseY = -50 + li * spacing
+    for (let ci = 0; ci < colCount && idx < totalChars; ci++) {
+      const i4 = idx * 4
+      particles[i4] = -20 + ci * cw
+      particles[i4 + 1] = baseY
+      particles[i4 + 2] = 0
+      particles[i4 + 3] = 0
+      charIdxs[idx] = textIdx % textLen
+      textIdx++
+      idx++
+    }
+  }
+  totalChars = idx
   initialized = true
 }
 
-// Output: per-line data for renderer
-const MAX_LINES = 100
-const lineYs = new Float32Array(MAX_LINES)
-const lineAngles = new Float32Array(MAX_LINES)
-const lineSkews = new Float32Array(MAX_LINES)
+export function updateFlowField(noiseFlow, noiseSkew, W, H, time, textLen) {
+  if (!initialized) initParticles(W, H, textLen)
 
-export function updateFlowField(noiseFlow, noiseSkew, W, H, time) {
-  if (!initialized) initLeaders(H)
+  updateGrid(noiseFlow, noiseSkew, W, H, time)
 
-  const tsk = time * 0.05
+  for (let i = 0; i < totalChars; i++) {
+    const i4 = i * 4
+    let x = particles[i4]
+    let y = particles[i4 + 1]
+    let angle = particles[i4 + 2]
 
-  for (let i = 0; i < lineCount; i++) {
-    const i3 = i * 3
-    let x = leaders[i3]
-    let y = leaders[i3 + 1]
-    let angle = leaders[i3 + 2]
-
-    // Update leader angle from ridge flow field
-    const targetAngle = ridgeAngle(noiseFlow, x, y, time)
+    const targetAngle = sampleGrid(angleGrid, x, y)
     angle += (targetAngle - angle) * ANGLE_SMOOTH
-    leaders[i3 + 2] = angle
+    particles[i4 + 2] = angle
 
-    // Nudge leader position
-    x += Math.cos(angle) * LEADER_SPEED
-    y += Math.sin(angle) * LEADER_SPEED
+    x += Math.cos(angle) * PARTICLE_SPEED
+    y += Math.sin(angle) * PARTICLE_SPEED
 
-    // Wrap vertically
-    if (y > H + 50) y -= H + 100
-    if (y < -50) y += H + 100
+    if (x > W + 40) x = -20
+    if (x < -40) x = W + 20
+    if (y > H + 40) y = -20
+    if (y < -40) y = H + 20
 
-    leaders[i3] = MARGIN // x stays at left margin (lines always start left)
-    leaders[i3 + 1] = y
-
-    // Output for renderer
-    lineYs[i] = y
-    lineAngles[i] = angle
-
-    // Skew from separate noise
-    const sk = noiseSkew.noise(y * 0.005 + tsk, time * 0.04)
-    lineSkews[i] = sk * SKEW_STRENGTH
+    particles[i4] = x
+    particles[i4 + 1] = y
+    particles[i4 + 3] = sampleGrid(skewGrid, x, y)
   }
 
-  return { lineYs, lineAngles, lineSkews, count: lineCount }
+  return { particles, charIdxs, count: totalChars }
 }
 
-export function resetLeaders() {
+export function resetParticles() {
   initialized = false
 }
