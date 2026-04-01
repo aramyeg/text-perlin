@@ -5,7 +5,7 @@
 import { getAtlas, getCharIndex, getCellW, getCellH, getColorCount } from './atlas.js'
 
 const COLOR_SCALE = 0.004
-const COLOR_SPEED = 0.025
+const COLOR_SPEED = 0.06
 
 export function render(ctx, W, H, flowData, text, noiseColor, time) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
