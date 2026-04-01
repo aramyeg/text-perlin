@@ -1,15 +1,16 @@
 // Flow field: traces curved paths through a Perlin noise field.
 // Characters placed along paths, following the curve tangent.
 //
-// Paths start from left edge, top edge, and right edge to create
-// diverse flow directions. Starting angle varies per path based on
-// noise at the start position.
+// Paths primarily from left edge with some top/right variety.
+// Angle heavily smoothed to prevent sudden direction jumps.
+// Reduced angle range keeps paths closer to horizontal,
+// minimizing negative space while still showing organic curves.
 
 import { getCharWidth } from './atlas.js'
 
 const NOISE_SCALE = 0.003
-const ANGLE_RANGE = Math.PI * 0.45
-const SMOOTH = 0.12
+const ANGLE_RANGE = Math.PI * 0.3 // ±27° — gentler curves, less negative space
+const SMOOTH = 0.06 // very heavy smoothing — no sudden jumps
 
 const MAX_CHARS = 15000
 const _xs = new Float32Array(MAX_CHARS)
@@ -28,7 +29,8 @@ function tracePath(noise, startX, startY, initAngle, W, H, time, count, textIdx,
       x * NOISE_SCALE + time * 0.03,
       y * NOISE_SCALE + time * 0.04
     )
-    const target = n * ANGLE_RANGE + initAngle * 0.3
+    // Blend toward initAngle to keep paths from straying too far
+    const target = n * ANGLE_RANGE + initAngle * 0.2
     angle += (target - angle) * SMOOTH
 
     _xs[count] = x
@@ -46,39 +48,38 @@ function tracePath(noise, startX, startY, initAngle, W, H, time, count, textIdx,
 }
 
 export function traceFlowField(noise, W, H, time, textLen) {
-  const spacing = 13 * 1.15
+  const spacing = 13 * 1.25
   let count = 0
   let textIdx = 0
 
-  // Left edge paths — primary, flowing rightward with noise-varied angles
-  let startY = -40
-  while (startY < H + 60 && count < MAX_CHARS - 300) {
-    // Vary starting angle per path using noise at the start position
-    const initAngle = noise.noise(startY * 0.01 + time * 0.02, time * 0.015) * 0.3
+  // Left edge paths — primary, tightly packed
+  let startY = -50
+  while (startY < H + 70 && count < MAX_CHARS - 300) {
+    const initAngle = noise.noise(startY * 0.01 + time * 0.02, time * 0.015) * 0.15
     const result = tracePath(noise, -5, startY, initAngle, W, H, time, count, textIdx, textLen)
     count = result.count
     textIdx = result.textIdx
     startY += spacing
   }
 
-  // Top edge paths — flowing downward-ish, creates crossing patterns
-  let startX = 50
-  while (startX < W - 50 && count < MAX_CHARS - 300) {
-    const initAngle = Math.PI * 0.3 + noise.noise(startX * 0.008 + time * 0.02, time * 0.018) * 0.4
+  // Top edge paths — sparse, gentle downward angle
+  let startX = 80
+  while (startX < W - 80 && count < MAX_CHARS - 300) {
+    const initAngle = Math.PI * 0.15 + noise.noise(startX * 0.006 + time * 0.02, time * 0.018) * 0.2
     const result = tracePath(noise, startX, -10, initAngle, W, H, time, count, textIdx, textLen)
     count = result.count
     textIdx = result.textIdx
-    startX += spacing * 6
+    startX += spacing * 8
   }
 
-  // Right edge paths — flowing leftward, counter-current
-  startY = 100
-  while (startY < H - 100 && count < MAX_CHARS - 300) {
-    const initAngle = Math.PI + noise.noise(startY * 0.01 + time * 0.02, 50 + time * 0.015) * 0.4
+  // Right edge paths — very sparse counter-flow
+  startY = 150
+  while (startY < H - 150 && count < MAX_CHARS - 300) {
+    const initAngle = Math.PI - noise.noise(startY * 0.008 + time * 0.02, 50 + time * 0.015) * 0.2
     const result = tracePath(noise, W + 5, startY, initAngle, W, H, time, count, textIdx, textLen)
     count = result.count
     textIdx = result.textIdx
-    startY += spacing * 5
+    startY += spacing * 7
   }
 
   return { count, xs: _xs, ys: _ys, angles: _angles, charIdxs: _charIdxs }
