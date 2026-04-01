@@ -1,63 +1,60 @@
-// Renderer: draws characters using atlas drawImage.
-// Each character gets:
-//   - Position + gentle rotation from the flow field path
-//   - Per-character SKEW from separate noise (the main visual effect)
-//   - Color from yet another noise field
-//
-// setTransform(a, b, c, d, e, f) where:
-//   a=cos*scaleX, b=sin, c=skewX + (-sin), d=cos*scaleY, e=tx, f=ty
-// We combine rotation and skew in one matrix.
+// Renderer: draws whole lines of text with per-line transforms.
+// Each line gets position (y from leader), skew, and color from noise.
+// ~50-60 fillText calls per frame = plenty fast.
 
-import { getAtlas, getCharIndex, getCellW, getCellH, getColorCount } from './atlas.js'
 import { theme } from './theme.js'
 
+const FONT = '13px "Courier New",monospace'
 const COLOR_SCALE = 0.004
-const COLOR_SPEED = 0.05
+const COLOR_SPEED = 0.06
+
+// Pre-bake color palette as CSS strings
+const PALETTE = theme.palette
+const PALETTE_CSS = PALETTE.map((c, i) => {
+  return { color: c, alpha: 0.3 + (i / (PALETTE.length - 1)) * 0.7 }
+})
 
 export function render(ctx, W, H, flowData, text, noiseColor, time) {
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.fillStyle = theme.background
   ctx.fillRect(0, 0, W, H)
+  ctx.font = FONT
+  ctx.textBaseline = 'top'
 
-  const atlas = getAtlas()
-  const charIndex = getCharIndex()
-  const cw = getCellW()
-  const ch = getCellH()
-  const maxCI = getColorCount() - 1
+  const { lineYs, lineAngles, lineSkews, count } = flowData
+  const maxCI = PALETTE_CSS.length - 1
   const tc = time * COLOR_SPEED
 
-  const { count, xs, ys, angles, skews, charIdxs } = flowData
+  // Measure char width once
+  const cw = ctx.measureText('M').width
+  const charsPerLine = Math.ceil(W / cw) + 5
+  const textLen = text.length
 
   for (let i = 0; i < count; i++) {
-    const x = xs[i]
-    const y = ys[i]
-    if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue
+    const y = lineYs[i]
+    if (y < -20 || y > H + 20) continue
 
-    const char = text[charIdxs[i]]
-    const col = charIndex.get(char)
-    if (col === undefined) continue
+    const skew = lineSkews[i]
 
-    // Color from noise
-    const cn = noiseColor.noise(x * COLOR_SCALE + tc, y * COLOR_SCALE + tc * 0.6)
+    // Color from noise at line center
+    const cn = noiseColor.noise(W * 0.5 * COLOR_SCALE + tc, y * COLOR_SCALE + tc * 0.6)
     const ci = Math.max(0, Math.min(maxCI, ((cn + 1) * 0.5 * maxCI + 0.5) | 0))
 
-    // Combine path rotation + character skew into one transform
-    const a = angles[i]
-    const skew = skews[i]
-    const cos = Math.cos(a)
-    const sin = Math.sin(a)
+    // Extract line of text
+    const startIdx = (i * charsPerLine) % textLen
+    let lineText
+    if (startIdx + charsPerLine <= textLen) {
+      lineText = text.slice(startIdx, startIdx + charsPerLine)
+    } else {
+      lineText = text.slice(startIdx) + text.slice(0, charsPerLine - (textLen - startIdx))
+    }
 
-    // Matrix: rotation * skew
-    // [cos, sin] * [1, 0]   = [cos,        sin      ]
-    // [-sin,cos]   [skew,1]   [-sin+skew*cos, cos+skew*sin] ... wait
-    // Actually setTransform(a,b,c,d,e,f):
-    //   a = horizontal scaling (cos for rotation)
-    //   b = vertical skewing (sin for rotation)
-    //   c = horizontal skewing (-sin for rotation, + skew added)
-    //   d = vertical scaling (cos for rotation)
-    ctx.setTransform(cos, sin, -sin + skew, cos, x, y)
-    ctx.drawImage(atlas, col * cw, ci * ch, cw, ch, 0, 0, cw, ch)
+    ctx.setTransform(1, 0, skew, 1, 4, y)
+    ctx.globalAlpha = PALETTE_CSS[ci].alpha
+    ctx.fillStyle = PALETTE_CSS[ci].color
+    ctx.fillText(lineText, 0, 0)
   }
 
   ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.globalAlpha = 1
 }

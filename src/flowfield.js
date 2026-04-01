@@ -1,91 +1,104 @@
-// Flow field: traces nearly-horizontal paths through a Perlin noise field.
-// Paths curve gently. The dramatic visual effect comes from per-character
-// SKEW (applied in the renderer), not from path curvature.
+// Flow field with PERSISTENT LINE LEADERS and ridge noise for dune patterns.
+// Each line has a "leader" particle that moves through the flow field.
+// The line is drawn starting at the leader's position, following the
+// local flow field angle. Leader positions persist across frames = smooth.
 //
-// Also outputs a skew value per character from a separate noise sample,
-// so the renderer can lean characters toward noise hot spots.
+// Ridge noise (1 - abs(noise)) creates dense parallel dune ridges.
+// Domain warping adds organic irregularity.
 
 import { getCharWidth } from './atlas.js'
 
-const NOISE_SCALE = 0.003
-const ANGLE_RANGE = Math.PI * 0.18 // ±16° — very gentle curves, minimal gaps
-const SMOOTH = 0.05
+// Ridge noise parameters
+const RIDGE_PERP_SCALE = 0.016
+const RIDGE_PARA_SCALE = 0.004
+const WIND_ANGLE = Math.PI * 0.12
+const WIND_COS = Math.cos(WIND_ANGLE)
+const WIND_SIN = Math.sin(WIND_ANGLE)
+const WARP_SCALE = 0.0025
+const WARP_STRENGTH = 180
 
-// Skew noise: sampled at each character position, controls character lean
-const SKEW_NOISE_SCALE = 0.0025
-const SKEW_SPEED_X = 0.04
-const SKEW_SPEED_Y = 0.06
-const SKEW_STRENGTH = 1.2
+// Leader motion
+const LEADER_SPEED = 0.3
+const ANGLE_SMOOTH = 0.06
 
-const MAX_CHARS = 15000
-const _xs = new Float32Array(MAX_CHARS)
-const _ys = new Float32Array(MAX_CHARS)
-const _angles = new Float32Array(MAX_CHARS)
-const _skews = new Float32Array(MAX_CHARS)
-const _charIdxs = new Uint16Array(MAX_CHARS)
+// Skew per line
+const SKEW_STRENGTH = 1.6
 
-function tracePath(noiseFlow, noiseSkew, startX, startY, initAngle, W, H, time, count, textIdx, textLen) {
-  const cw = getCharWidth()
-  let x = startX
-  let y = startY
-  let angle = initAngle
-  const tsk_x = time * SKEW_SPEED_X
-  const tsk_y = time * SKEW_SPEED_Y
+// Line layout
+const LINE_SPACING = 13 * 1.2
+const MARGIN = 4
 
-  while (x < W + 40 && x > -40 && y > -30 && y < H + 30 && count < MAX_CHARS) {
-    // Flow direction — gentle
-    const n = noiseFlow.noise(
-      x * NOISE_SCALE + time * 0.03,
-      y * NOISE_SCALE + time * 0.04
-    )
-    const target = n * ANGLE_RANGE + initAngle * 0.15
-    angle += (target - angle) * SMOOTH
+let leaders = null // Float32Array: [x, y, angle] per line
+let lineCount = 0
+let initialized = false
 
-    // Per-character skew from separate noise field
-    const sk = noiseSkew.noise(
-      x * SKEW_NOISE_SCALE + tsk_x,
-      y * SKEW_NOISE_SCALE + tsk_y
-    )
-
-    _xs[count] = x
-    _ys[count] = y
-    _angles[count] = angle
-    _skews[count] = sk * SKEW_STRENGTH
-    _charIdxs[count] = textIdx % textLen
-    textIdx++
-    count++
-
-    x += Math.cos(angle) * cw
-    y += Math.sin(angle) * cw
-  }
-
-  return { count, textIdx }
+function ridgeAngle(noise, x, y, t) {
+  const wx = noise.noise(x * WARP_SCALE + 3.1, y * WARP_SCALE + 7.4) * WARP_STRENGTH
+  const wy = noise.noise(x * WARP_SCALE + 1.7, y * WARP_SCALE + 4.9) * WARP_STRENGTH
+  const px = ((x + wx) * WIND_COS - (y + wy) * WIND_SIN) * RIDGE_PERP_SCALE
+  const py = ((x + wx) * WIND_SIN + (y + wy) * WIND_COS) * RIDGE_PARA_SCALE
+  const n = noise.noise(px + t * 0.006, py + t * 0.01)
+  const ridge = 1.0 - Math.abs(n)
+  return WIND_ANGLE + (ridge - 0.5) * 1.0
 }
 
-export function traceFlowField(noiseFlow, noiseSkew, W, H, time, textLen) {
-  const spacing = 13 * 1.15
-  let count = 0
-  let textIdx = 0
+function initLeaders(H) {
+  lineCount = Math.ceil((H + 100) / LINE_SPACING)
+  leaders = new Float32Array(lineCount * 3)
+  for (let i = 0; i < lineCount; i++) {
+    const i3 = i * 3
+    leaders[i3] = MARGIN       // x: start at left edge
+    leaders[i3 + 1] = -50 + i * LINE_SPACING // y
+    leaders[i3 + 2] = 0        // angle
+  }
+  initialized = true
+}
 
-  // Left edge — primary flow
-  let startY = -50
-  while (startY < H + 70 && count < MAX_CHARS - 300) {
-    const initAngle = noiseFlow.noise(startY * 0.01 + time * 0.02, time * 0.015) * 0.1
-    const result = tracePath(noiseFlow, noiseSkew, -5, startY, initAngle, W, H, time, count, textIdx, textLen)
-    count = result.count
-    textIdx = result.textIdx
-    startY += spacing
+// Output: per-line data for renderer
+const MAX_LINES = 100
+const lineYs = new Float32Array(MAX_LINES)
+const lineAngles = new Float32Array(MAX_LINES)
+const lineSkews = new Float32Array(MAX_LINES)
+
+export function updateFlowField(noiseFlow, noiseSkew, W, H, time) {
+  if (!initialized) initLeaders(H)
+
+  const tsk = time * 0.05
+
+  for (let i = 0; i < lineCount; i++) {
+    const i3 = i * 3
+    let x = leaders[i3]
+    let y = leaders[i3 + 1]
+    let angle = leaders[i3 + 2]
+
+    // Update leader angle from ridge flow field
+    const targetAngle = ridgeAngle(noiseFlow, x, y, time)
+    angle += (targetAngle - angle) * ANGLE_SMOOTH
+    leaders[i3 + 2] = angle
+
+    // Nudge leader position
+    x += Math.cos(angle) * LEADER_SPEED
+    y += Math.sin(angle) * LEADER_SPEED
+
+    // Wrap vertically
+    if (y > H + 50) y -= H + 100
+    if (y < -50) y += H + 100
+
+    leaders[i3] = MARGIN // x stays at left margin (lines always start left)
+    leaders[i3 + 1] = y
+
+    // Output for renderer
+    lineYs[i] = y
+    lineAngles[i] = angle
+
+    // Skew from separate noise
+    const sk = noiseSkew.noise(y * 0.005 + tsk, time * 0.04)
+    lineSkews[i] = sk * SKEW_STRENGTH
   }
 
-  // Top edge — sparse downward
-  let startX = 100
-  while (startX < W - 100 && count < MAX_CHARS - 300) {
-    const initAngle = Math.PI * 0.12 + noiseFlow.noise(startX * 0.005 + time * 0.02, time * 0.018) * 0.15
-    const result = tracePath(noiseFlow, noiseSkew, startX, -10, initAngle, W, H, time, count, textIdx, textLen)
-    count = result.count
-    textIdx = result.textIdx
-    startX += spacing * 10
-  }
+  return { lineYs, lineAngles, lineSkews, count: lineCount }
+}
 
-  return { count, xs: _xs, ys: _ys, angles: _angles, skews: _skews, charIdxs: _charIdxs }
+export function resetLeaders() {
+  initialized = false
 }
