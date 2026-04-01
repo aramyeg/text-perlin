@@ -1,8 +1,7 @@
 // Per-character particle flow field with ridge noise.
-// Each character is a persistent particle that drifts through the field.
-// Ridge noise (1-abs) creates dense parallel dune ridges.
-// Budget: ~5000 chars for 60fps with drawImage atlas.
-// Wider line spacing than before to stay within budget.
+// Each particle has a small POSITION OFFSET based on its index,
+// so nearby particles sample slightly different noise positions.
+// This prevents all particles converging onto identical ridges.
 
 import { getCharWidth } from './atlas.js'
 
@@ -23,7 +22,10 @@ const SKEW_STRENGTH = 1.5
 const PARTICLE_SPEED = 0.4
 const ANGLE_SMOOTH = 0.07
 
-// Grid-cached noise for performance
+// Per-particle noise offset to decorrelate neighbors
+const OFFSET_STRENGTH = 60 // pixels of virtual offset per particle
+
+// Grid-cached noise
 const GRID_CELL = 48
 let gridW = 0, gridH = 0
 let angleGrid = null
@@ -34,12 +36,9 @@ function ridgeAngle(noise, x, y, t) {
   const wy = noise.noise(x * WARP_SCALE + 1.7, y * WARP_SCALE + 4.9) * WARP_STRENGTH
   const px = ((x + wx) * WIND_COS - (y + wy) * WIND_SIN) * RIDGE_PERP_SCALE
   const py = ((x + wx) * WIND_SIN + (y + wy) * WIND_COS) * RIDGE_PARA_SCALE
-
-  // Two octaves of ridge noise for more varied dune patterns
-  const n1 = noise.noise(px + t * 0.006, py + t * 0.01)
-  const n2 = noise.noise(px * 2.2 + 10 + t * 0.009, py * 2.2 + 10 + t * 0.015) * 0.4
+  const n1 = noise.noise(px + t * 0.02, py + t * 0.03)
+  const n2 = noise.noise(px * 2.2 + 10 + t * 0.025, py * 2.2 + 10 + t * 0.04) * 0.4
   const ridge = 1.0 - Math.abs(n1 + n2)
-
   return WIND_ANGLE + (ridge - 0.5) * 1.4
 }
 
@@ -78,22 +77,26 @@ function sampleGrid(grid, x, y) {
 }
 
 // Particle state
-const MAX_CHARS = 16000
+const MAX_CHARS = 10000
 let particles = null
+let offsets = null // per-particle noise lookup offset
 let charIdxs = null
 let totalChars = 0
 let initialized = false
 
 function initParticles(W, H, textLen) {
   const cw = getCharWidth()
-  const spacing = 13 * 1.2
+  const spacing = 13 * 1.6
   const lineCount = Math.ceil((H + 100) / spacing)
   const colCount = Math.ceil((W + 80) / cw)
   totalChars = Math.min(lineCount * colCount, MAX_CHARS)
 
   particles = new Float32Array(totalChars * 4)
+  offsets = new Float32Array(totalChars * 2)
   charIdxs = new Uint16Array(totalChars)
 
+  // Simple hash for deterministic per-particle offsets
+  let hash = 7
   let idx = 0
   let textIdx = 0
   for (let li = 0; li < lineCount && idx < totalChars; li++) {
@@ -104,6 +107,13 @@ function initParticles(W, H, textLen) {
       particles[i4 + 1] = baseY
       particles[i4 + 2] = 0
       particles[i4 + 3] = 0
+
+      // Deterministic pseudo-random offset per particle
+      hash = (hash * 16807 + 1) & 0x7fffffff
+      offsets[idx * 2] = ((hash & 0xffff) / 65536 - 0.5) * OFFSET_STRENGTH
+      hash = (hash * 16807 + 1) & 0x7fffffff
+      offsets[idx * 2 + 1] = ((hash & 0xffff) / 65536 - 0.5) * OFFSET_STRENGTH
+
       charIdxs[idx] = textIdx % textLen
       textIdx++
       idx++
@@ -124,7 +134,10 @@ export function updateFlowField(noiseFlow, noiseSkew, W, H, time, textLen) {
     let y = particles[i4 + 1]
     let angle = particles[i4 + 2]
 
-    const targetAngle = sampleGrid(angleGrid, x, y)
+    // Sample grid at offset position — each particle sees a slightly different field
+    const ox = x + offsets[i * 2]
+    const oy = y + offsets[i * 2 + 1]
+    const targetAngle = sampleGrid(angleGrid, ox, oy)
     angle += (targetAngle - angle) * ANGLE_SMOOTH
     particles[i4 + 2] = angle
 

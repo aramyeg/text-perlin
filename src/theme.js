@@ -1,4 +1,4 @@
-// Theme configuration: dark (default) and light (inverted sand).
+// Theme configuration: dark (default), light (sand), sky (clouds).
 
 const DARK = {
   background: '#0d0906',
@@ -16,7 +16,17 @@ const LIGHT = {
   ]
 }
 
+const SKY = {
+  background: '#1a3a5c',
+  palette: [
+    '#1e3f63', '#24486e', '#2d5a82', '#3a7099',
+    '#5a9ab8', '#8ec0d8', '#c4dfe9', '#f0f6fa'
+  ]
+}
+
+const THEMES = { dark: DARK, light: LIGHT, sky: SKY }
+
 const params = new URLSearchParams(location.search)
 const themeName = params.get('theme') || 'dark'
 
-export const theme = themeName === 'light' ? LIGHT : DARK
+export const theme = THEMES[themeName] || DARK
