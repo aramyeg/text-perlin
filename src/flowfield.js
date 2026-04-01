@@ -12,8 +12,8 @@ const RIDGE_PARA_SCALE = 0.004
 const WIND_ANGLE = Math.PI * 0.12
 const WIND_COS = Math.cos(WIND_ANGLE)
 const WIND_SIN = Math.sin(WIND_ANGLE)
-const WARP_SCALE = 0.0025
-const WARP_STRENGTH = 180
+const WARP_SCALE = 0.003
+const WARP_STRENGTH = 280
 
 // Skew
 const SKEW_SCALE = 0.003
@@ -34,9 +34,13 @@ function ridgeAngle(noise, x, y, t) {
   const wy = noise.noise(x * WARP_SCALE + 1.7, y * WARP_SCALE + 4.9) * WARP_STRENGTH
   const px = ((x + wx) * WIND_COS - (y + wy) * WIND_SIN) * RIDGE_PERP_SCALE
   const py = ((x + wx) * WIND_SIN + (y + wy) * WIND_COS) * RIDGE_PARA_SCALE
-  const n = noise.noise(px + t * 0.006, py + t * 0.01)
-  const ridge = 1.0 - Math.abs(n)
-  return WIND_ANGLE + (ridge - 0.5) * 1.2
+
+  // Two octaves of ridge noise for more varied dune patterns
+  const n1 = noise.noise(px + t * 0.006, py + t * 0.01)
+  const n2 = noise.noise(px * 2.2 + 10 + t * 0.009, py * 2.2 + 10 + t * 0.015) * 0.4
+  const ridge = 1.0 - Math.abs(n1 + n2)
+
+  return WIND_ANGLE + (ridge - 0.5) * 1.4
 }
 
 function updateGrid(noiseFlow, noiseSkew, W, H, time) {
@@ -74,7 +78,7 @@ function sampleGrid(grid, x, y) {
 }
 
 // Particle state
-const MAX_CHARS = 5500
+const MAX_CHARS = 16000
 let particles = null
 let charIdxs = null
 let totalChars = 0
@@ -82,7 +86,7 @@ let initialized = false
 
 function initParticles(W, H, textLen) {
   const cw = getCharWidth()
-  const spacing = 13 * 2.8 // wider spacing to keep ~5000 chars total
+  const spacing = 13 * 1.2
   const lineCount = Math.ceil((H + 100) / spacing)
   const colCount = Math.ceil((W + 80) / cw)
   totalChars = Math.min(lineCount * colCount, MAX_CHARS)
